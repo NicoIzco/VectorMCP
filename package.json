@@ -1,0 +1,19 @@
+{
+  "name": "vectormcp",
+  "version": "0.1.0",
+  "description": "Lightweight semantic MCP tool router",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "vectormcp": "src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js start",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "express": "^4.19.2",
+    "simple-git": "^3.25.0"
+  }
+}
