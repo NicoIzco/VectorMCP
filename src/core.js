@@ -117,7 +117,43 @@ export class ToolRegistry {
   }
 
   removeBySource(source) {
-    this.tools = this.tools.filter((t) => t.source !== source);
+    this.tools = this.tools.filter((t) => t.source !== source && !String(t.source || '').startsWith(`${source}#`));
+    this.save();
+  }
+}
+
+export class SourceMeta {
+  constructor(dataDir) {
+    this.filePath = path.join(dataDir, 'source-meta.json');
+    this.meta = {};
+  }
+
+  load() {
+    if (fs.existsSync(this.filePath)) {
+      this.meta = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
+    }
+  }
+
+  save() {
+    fs.writeFileSync(this.filePath, JSON.stringify(this.meta, null, 2));
+  }
+
+  set(sourceId, details) {
+    this.meta[sourceId] = {
+      lastSync: details.lastSync ?? null,
+      toolCount: Number(details.toolCount || 0),
+      status: details.status || 'idle',
+      error: details.error ?? null
+    };
+    this.save();
+  }
+
+  get(sourceId) {
+    return this.meta[sourceId] || null;
+  }
+
+  remove(sourceId) {
+    delete this.meta[sourceId];
     this.save();
   }
 }
