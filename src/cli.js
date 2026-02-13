@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { Command } from 'commander';
 import { bootstrap } from './server.js';
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from './core.js';
+import { createMcpProxy } from './mcp-proxy.js';
 
 const program = new Command();
 program.name('vectormcp').description('Semantic MCP tool router').version('0.1.0');
@@ -94,6 +95,38 @@ program
   .command('add-skill <path-or-git-url>')
   .description('Add a Claude Skill folder to skillsDir')
   .action((pathOrGitUrl) => addSkill(pathOrGitUrl));
+
+
+program
+  .command('proxy')
+  .description('Start MCP proxy mode for Claude Desktop, Cursor, and other MCP clients')
+  .option('--transport <type>', 'transport type (stdio|sse)', 'stdio')
+  .option('-p, --port <n>', 'port for SSE transport', '3000')
+  .option('-c, --config <path>', 'config path', 'config.json')
+  .action(async (opts) => {
+    if (!fs.existsSync(opts.config)) {
+      console.error(`Config not found: ${opts.config}. Run \`vectormcp init\` first.`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const config = loadConfig(opts.config);
+    const proxy = await createMcpProxy(config);
+    const transport = String(opts.transport || 'stdio').toLowerCase();
+
+    if (transport === 'stdio') {
+      proxy.transport.startStdio();
+      return;
+    }
+
+    if (transport === 'sse') {
+      proxy.transport.startSse(Number(opts.port || 3000));
+      return;
+    }
+
+    console.error(`Unsupported transport: ${transport}. Use "stdio" or "sse".`);
+    process.exitCode = 1;
+  });
 
 program
   .command('query <text>')
