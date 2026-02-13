@@ -1,5 +1,5 @@
 import express from 'express';
-import { parseSkillsDir, parseSource } from './parsers.js';
+import { parseSource, parseSkillsDir } from './parsers.js';
 import { ActivityTracker } from './analytics.js';
 import { SourceMeta, ensureDataDir, LocalEmbedder, ToolRegistry, VectorStore, saveConfig } from './core.js';
 
@@ -15,16 +15,6 @@ export async function bootstrap(config) {
   const analytics = new ActivityTracker(config.dataDir);
   analytics.load();
   const sessionHistory = new Map();
-
-  async function syncDiscoveredSkills() {
-    const skillTools = parseSkillsDir(config.skillsDir || './skills');
-    tools.tools = tools.tools.filter((tool) => !tool.skillFormat);
-    tools.save();
-    tools.upsertMany(skillTools);
-    index.rebuild(tools.tools, embedder);
-    analytics.recordEvent('sync', `Synced: skills directory — ${skillTools.length} tools`);
-    return skillTools.length;
-  }
 
   async function syncSource(source) {
     const sourceId = source.path || source.url;
@@ -60,10 +50,18 @@ export async function bootstrap(config) {
     }
   }
 
-  await syncDiscoveredSkills();
 
   if (tools.tools.length === 0 && config.sources.length > 0) {
     await syncAll();
+  }
+
+  // Auto-discover Claude Skills from skillsDir
+  const skillsDir = config.skillsDir || './skills';
+  const skills = parseSkillsDir(skillsDir);
+  if (skills.length > 0) {
+    tools.upsertMany(skills);
+    index.rebuild(tools.tools, embedder);
+    console.log(`Loaded ${skills.length} Claude Skill(s) from ${skillsDir}`);
   }
 
   const app = express();
