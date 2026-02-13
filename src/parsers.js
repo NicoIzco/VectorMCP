@@ -10,6 +10,53 @@ export async function parseSource(source, dataDir) {
   return [];
 }
 
+export function parseSkillsDir(skillsDir) {
+  if (!skillsDir || !fs.existsSync(skillsDir)) return [];
+  const folders = fs.readdirSync(skillsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+  const tools = [];
+
+  for (const folder of folders) {
+    const skillPath = path.join(skillsDir, folder.name, 'SKILL.md');
+    if (!fs.existsSync(skillPath)) continue;
+
+    const content = fs.readFileSync(skillPath, 'utf8');
+    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    const displayPath = `skills/${folder.name}/SKILL.md`;
+    if (!match) {
+      console.warn(`⚠ No YAML frontmatter in ${displayPath} — skipping`);
+      continue;
+    }
+
+    const frontmatter = parseSimpleYaml(match[1]);
+    if (!frontmatter.name) {
+      console.warn(`⚠ Missing required "name" in ${displayPath} — skipping`);
+      continue;
+    }
+    if (!frontmatter.description) {
+      console.warn(`⚠ Missing required "description" in ${displayPath} — skipping`);
+      continue;
+    }
+
+    const markdownBody = content.slice(match[0].length).trim();
+    const sourcePath = path.relative(process.cwd(), skillPath).split(path.sep).join('/').replace(/^\.\//, '');
+    tools.push(
+      makeTool({
+        name: frontmatter.name,
+        description: frontmatter.description,
+        source: sourcePath,
+        category: frontmatter.category || 'general',
+        invoke: { type: 'skill' },
+        version: frontmatter.version || null,
+        dependencies: Array.isArray(frontmatter.dependencies) ? frontmatter.dependencies : [],
+        markdownBody,
+        skillFormat: true
+      })
+    );
+  }
+
+  return tools;
+}
+
 function parseMarkdownSkills(content, sourceName, category) {
   const blocks = content.split(/^##\s+/m).slice(1);
   return blocks.map((block) => {
@@ -103,7 +150,41 @@ function scanFiles(dir, exts) {
   return out;
 }
 
-function makeTool({ name, description, params = {}, source, category = 'general', invoke }) {
+function parseSimpleYaml(frontmatter) {
+  const parsed = {};
+  let currentKey = null;
+  for (const rawLine of frontmatter.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    if (trimmed.startsWith('- ')) {
+      if (currentKey === 'dependencies') {
+        parsed.dependencies.push(trimmed.slice(2).trim().replace(/^['"]|['"]$/g, ''));
+      }
+      continue;
+    }
+
+    const separator = line.indexOf(':');
+    if (separator === -1) {
+      currentKey = null;
+      continue;
+    }
+
+    const key = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    if (key === 'dependencies') {
+      parsed.dependencies = value ? value.split(',').map((item) => item.trim()).filter(Boolean) : [];
+      currentKey = 'dependencies';
+      continue;
+    }
+    parsed[key] = value.replace(/^['"]|['"]$/g, '');
+    currentKey = null;
+  }
+  return parsed;
+}
+
+function makeTool({ name, description, params = {}, source, category = 'general', invoke, version = null, dependencies = [], markdownBody = '', skillFormat = false }) {
   const id = crypto.createHash('sha1').update(`${source}:${name}`).digest('hex').slice(0, 16);
-  return { id, name, description, params, source, category, invoke };
+  return { id, name, description, params, source, category, invoke, version, dependencies, markdownBody, skillFormat };
 }

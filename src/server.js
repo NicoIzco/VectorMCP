@@ -1,5 +1,5 @@
 import express from 'express';
-import { parseSource } from './parsers.js';
+import { parseSkillsDir, parseSource } from './parsers.js';
 import { ActivityTracker } from './analytics.js';
 import { SourceMeta, ensureDataDir, LocalEmbedder, ToolRegistry, VectorStore, saveConfig } from './core.js';
 
@@ -14,6 +14,17 @@ export async function bootstrap(config) {
   sourceMeta.load();
   const analytics = new ActivityTracker(config.dataDir);
   analytics.load();
+  const sessionHistory = new Map();
+
+  async function syncDiscoveredSkills() {
+    const skillTools = parseSkillsDir(config.skillsDir || './skills');
+    tools.tools = tools.tools.filter((tool) => !tool.skillFormat);
+    tools.save();
+    tools.upsertMany(skillTools);
+    index.rebuild(tools.tools, embedder);
+    analytics.recordEvent('sync', `Synced: skills directory — ${skillTools.length} tools`);
+    return skillTools.length;
+  }
 
   async function syncSource(source) {
     const sourceId = source.path || source.url;
@@ -49,6 +60,8 @@ export async function bootstrap(config) {
     }
   }
 
+  await syncDiscoveredSkills();
+
   if (tools.tools.length === 0 && config.sources.length > 0) {
     await syncAll();
   }
@@ -65,9 +78,27 @@ export async function bootstrap(config) {
   app.post('/mcp/query', (req, res) => {
     const query = req.body?.query || '';
     const topK = Number(req.body?.topK || config.topK || 5);
-    const matches = index.search(query, embedder, topK);
+    const sessionId = req.body?.sessionId ? String(req.body.sessionId) : null;
+    let matches = index.search(query, embedder, topK);
+
+    if (sessionId) {
+      const previousToolIds = new Set(sessionHistory.get(sessionId) || []);
+      matches = matches
+        .map((match) => ({
+          ...match,
+          score: previousToolIds.has(match.tool.id) ? match.score * 1.3 : match.score
+        }))
+        .sort((a, b) => b.score - a.score);
+    }
+
     analytics.recordQuery(query);
     analytics.recordEvent('query', `Query: ${query} — ${matches.length} results`);
+
+    if (sessionId) {
+      const matchedToolIds = matches.map((match) => match.tool.id).slice(-20);
+      sessionHistory.set(sessionId, matchedToolIds);
+    }
+
     res.json({ query, matches });
   });
 
@@ -188,7 +219,12 @@ function toMcpSchema(tool) {
     metadata: {
       toolId: tool.id,
       category: tool.category,
-      source: tool.source
+      source: tool.source,
+      ...(tool.skillFormat && {
+        skillFormat: true,
+        version: tool.version || null,
+        dependencies: tool.dependencies || []
+      })
     }
   };
 }

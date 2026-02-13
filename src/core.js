@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 
 const DEFAULT_CONFIG = {
   dataDir: './data',
+  skillsDir: './skills',
   port: 3000,
   topK: 5,
   sources: []
@@ -61,7 +62,7 @@ export class VectorStore {
   rebuild(tools, embedder) {
     this.items = tools.map((tool) => ({
       id: tool.id,
-      vector: embedder.embed([tool.name, tool.description, tool.category].join(' ')),
+      vector: embedder.embed(buildEmbeddingInput(tool)),
       tool
     }));
     this.save();
@@ -78,6 +79,20 @@ export class VectorStore {
       .slice(0, topK);
     return scored;
   }
+}
+
+function buildEmbeddingInput(tool) {
+  if (tool.skillFormat === true) {
+    return [tool.name, tool.description, tool.category || '', extractKeyLines(tool.markdownBody)].join(' | ');
+  }
+  return [tool.name, tool.description, tool.category].join(' ');
+}
+
+function extractKeyLines(markdown) {
+  return String(markdown || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
 }
 
 function cosineSimilarity(a, b) {
