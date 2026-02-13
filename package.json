@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "vectormcp": "src/cli.js"
+    "vectormcp": "./src/cli.js"
   },
   "scripts": {
     "start": "node src/cli.js start",
@@ -15,5 +15,10 @@
     "commander": "^12.1.0",
     "express": "^4.19.2",
     "simple-git": "^3.25.0"
-  }
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ]
 }

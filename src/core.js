@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-const DEFAULT_CONFIG = {
+export const DEFAULT_CONFIG = {
   dataDir: './data',
   skillsDir: './skills',
   port: 3000,
