@@ -53,6 +53,41 @@ JSON:
 ]
 ```
 
+
+## Claude Skills (SKILL.md)
+
+VectorMCP natively supports the Claude Skills format. Drop skill folders into `./skills/`:
+
+```text
+skills/
+  my-task-skill/
+    SKILL.md
+  another-skill/
+    SKILL.md
+```
+
+Each `SKILL.md` must have YAML frontmatter with `name` and `description`:
+
+```yaml
+---
+name: my-task-skill
+description: Helps the user manage project tasks with structured checklists
+category: productivity
+version: 1.0.0
+---
+## Guidelines
+- Always create tasks as checkboxes
+- Group by priority
+```
+
+VectorMCP will auto-discover, parse, and index these skills for semantic search. They appear in `/mcp/tools` and `/mcp/query` results with `skillFormat: true` in metadata.
+
+Add a skill from git:
+
+```bash
+npx vectormcp add-skill https://github.com/user/my-skill-repo
+```
+
 ## Notes
 
 - Current embeddings are local hash vectors for zero-dependency startup.
