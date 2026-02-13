@@ -12,52 +12,53 @@ export async function parseSource(source, dataDir) {
 
 export function parseSkillsDir(skillsDir) {
   if (!skillsDir || !fs.existsSync(skillsDir)) return [];
-
-  const dirs = fs.readdirSync(skillsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
   const parsedSkills = [];
+  const skillFiles = scanFilesByName(skillsDir, 'SKILL.md');
 
-  for (const dir of dirs) {
-    const folderName = dir.name;
-    const skillPath = path.join(skillsDir, folderName, 'SKILL.md');
-    if (!fs.existsSync(skillPath)) continue;
-
-    const content = fs.readFileSync(skillPath, 'utf8');
-    const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-
-    if (!fmMatch) {
-      console.warn(`⚠ No YAML frontmatter in ${folderName}/SKILL.md — skipping`);
-      continue;
+  for (const skillFile of skillFiles) {
+    const parsed = parseSkillFile(skillFile, skillsDir);
+    if (parsed) {
+      parsedSkills.push(parsed);
     }
-
-    const frontmatter = parseFrontmatter(fmMatch[1]);
-
-    for (const field of ['name', 'description']) {
-      if (!frontmatter[field]) {
-        console.warn(`⚠ Missing required "${field}" in ${folderName}/SKILL.md — skipping`);
-        continue;
-      }
-    }
-
-    if (!frontmatter.name || !frontmatter.description) continue;
-
-    const markdownBody = content.slice(fmMatch[0].length).trim();
-
-    parsedSkills.push({
-      ...makeTool({
-        name: frontmatter.name,
-        description: frontmatter.description,
-        source: path.join(skillsDir, folderName, 'SKILL.md'),
-        category: frontmatter.category || 'general',
-        invoke: { type: 'skill' }
-      }),
-      version: frontmatter.version || null,
-      dependencies: frontmatter.dependencies || [],
-      markdownBody,
-      skillFormat: true
-    });
   }
 
   return parsedSkills;
+}
+
+export function parseSkillFile(skillPath, rootDir = path.dirname(skillPath)) {
+  const folderName = path.relative(rootDir, path.dirname(skillPath)) || path.basename(path.dirname(skillPath));
+  const content = fs.readFileSync(skillPath, 'utf8');
+  const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+
+  if (!fmMatch) {
+    console.warn(`⚠ No YAML frontmatter in ${folderName}/SKILL.md — skipping`);
+    return null;
+  }
+
+  const frontmatter = parseFrontmatter(fmMatch[1]);
+
+  for (const field of ['name', 'description']) {
+    if (!frontmatter[field]) {
+      console.warn(`⚠ Missing required "${field}" in ${folderName}/SKILL.md — skipping`);
+      return null;
+    }
+  }
+
+  const markdownBody = content.slice(fmMatch[0].length).trim();
+
+  return {
+    ...makeTool({
+      name: frontmatter.name,
+      description: frontmatter.description,
+      source: skillPath,
+      category: frontmatter.category || 'general',
+      invoke: { type: 'skill' }
+    }),
+    version: frontmatter.version || null,
+    dependencies: frontmatter.dependencies || [],
+    markdownBody,
+    skillFormat: true
+  };
 }
 
 function parseFrontmatter(frontmatterRaw) {
@@ -101,7 +102,7 @@ function parseFrontmatter(frontmatterRaw) {
   return out;
 }
 
-function parseMarkdownSkills(content, sourceName, category) {
+export function parseMarkdownSkills(content, sourceName, category) {
   const blocks = content.split(/^##\s+/m).slice(1);
   return blocks.map((block) => {
     const [titleLine, ...body] = block.split('\n');
@@ -111,7 +112,7 @@ function parseMarkdownSkills(content, sourceName, category) {
   });
 }
 
-function parseJsonSkills(content, sourceName, category) {
+export function parseJsonSkills(content, sourceName, category) {
   const parsed = JSON.parse(content);
   const entries = Array.isArray(parsed) ? parsed : [parsed];
   return entries.map((entry) =>
@@ -190,6 +191,19 @@ function scanFiles(dir, exts) {
       out.push(...scanFiles(full, exts));
     }
     if (entry.isFile() && exts.some((ext) => entry.name.endsWith(ext))) out.push(full);
+  }
+  return out;
+}
+
+function scanFilesByName(dir, fileName) {
+  const out = [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory() && !['.git', 'node_modules', 'dist', 'data'].includes(entry.name)) {
+      out.push(...scanFilesByName(full, fileName));
+    }
+    if (entry.isFile() && entry.name === fileName) out.push(full);
   }
   return out;
 }

@@ -50,19 +50,31 @@ export async function bootstrap(config) {
     }
   }
 
+  function syncSkills() {
+    const skillsDir = config.skillsDir || './skills';
+    const skills = parseSkillsDir(skillsDir);
+    const nonSkillTools = tools.tools.filter((tool) => !tool.skillFormat);
+    tools.tools = [...nonSkillTools, ...skills];
+    tools.save();
+    index.rebuild(tools.tools, embedder);
+    if (skills.length > 0) {
+      console.log(`Loaded ${skills.length} Claude Skill(s) from ${skillsDir}`);
+    }
+    return skills.length;
+  }
+
+  async function rebuildIndex() {
+    if (config.sources.length > 0) {
+      await syncAll();
+    }
+    syncSkills();
+  }
 
   if (tools.tools.length === 0 && config.sources.length > 0) {
     await syncAll();
   }
 
-  // Auto-discover Claude Skills from skillsDir
-  const skillsDir = config.skillsDir || './skills';
-  const skills = parseSkillsDir(skillsDir);
-  if (skills.length > 0) {
-    tools.upsertMany(skills);
-    index.rebuild(tools.tools, embedder);
-    console.log(`Loaded ${skills.length} Claude Skill(s) from ${skillsDir}`);
-  }
+  syncSkills();
 
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -203,7 +215,7 @@ export async function bootstrap(config) {
     console.log(`VectorMCP running on http://localhost:${config.port}`);
   });
 
-  return { app, server, tools, index, syncAll, sourceMeta, analytics };
+  return { app, server, tools, index, syncAll, sourceMeta, analytics, rebuildIndex };
 }
 
 function toMcpSchema(tool) {
