@@ -218,7 +218,7 @@ export async function bootstrap(config) {
   return { app, server, tools, index, syncAll, sourceMeta, analytics, rebuildIndex };
 }
 
-function toMcpSchema(tool) {
+export function toMcpSchema(tool) {
   return {
     name: tool.name,
     description: tool.description,
