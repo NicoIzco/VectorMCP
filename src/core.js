@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 export const DEFAULT_CONFIG = {
   dataDir: './data',
   skillsDir: './skills',
+  registryUrl: 'https://raw.githubusercontent.com/NicoIzco/vectormcp-registry/main/registry.json',
   port: 3000,
   topK: 5,
   sources: []

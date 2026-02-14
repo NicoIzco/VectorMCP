@@ -7,6 +7,8 @@ import { Command } from 'commander';
 import { bootstrap } from './server.js';
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from './core.js';
 import { createMcpProxy } from './mcp-proxy.js';
+import { parseSkillFile, parseSkillsDir } from './parsers.js';
+import { resolveSkill, searchRegistry } from './registry.js';
 
 const program = new Command();
 program.name('vectormcp').description('Semantic MCP tool router').version('0.1.0');
@@ -96,6 +98,134 @@ program
   .description('Add a Claude Skill folder to skillsDir')
   .action((pathOrGitUrl) => addSkill(pathOrGitUrl));
 
+program
+  .command('search <query>')
+  .description('Search for community skills in the public registry')
+  .action(async (query) => {
+    const config = loadConfig();
+    try {
+      const results = await searchRegistry(query, config.registryUrl || DEFAULT_CONFIG.registryUrl);
+      if (results.length === 0) {
+        console.log('No skills found.');
+        return;
+      }
+
+      printTable(
+        ['NAME', 'DESCRIPTION', 'TAGS'],
+        results.map((entry) => [
+          entry.name || '',
+          entry.description || '',
+          Array.isArray(entry.tags) ? entry.tags.join(', ') : ''
+        ])
+      );
+    } catch (error) {
+      console.error(error.message);
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('install <name>')
+  .description('Install a skill from the public registry (@user/skill-name) or git URL')
+  .action(async (name) => {
+    const config = loadConfig();
+    let skillSource = name;
+    const isRegistryName = String(name || '').startsWith('@');
+
+    if (isRegistryName) {
+      try {
+        skillSource = await resolveSkill(name, config.registryUrl || DEFAULT_CONFIG.registryUrl);
+      } catch (error) {
+        console.error(error.message);
+        process.exitCode = 1;
+        return;
+      }
+    }
+
+    const installResult = installSkillFromSource(skillSource, config.skillsDir || './skills');
+    if (!installResult.ok) {
+      console.error(installResult.message);
+      process.exitCode = 1;
+      return;
+    }
+
+    const printedName = isRegistryName ? name : installResult.folderName;
+    console.log(`Installed ${printedName} to ${path.join(config.skillsDir || './skills', installResult.folderName)}`);
+  });
+
+program
+  .command('uninstall <name>')
+  .description('Remove an installed skill from skillsDir')
+  .action((name) => {
+    const config = loadConfig();
+    const skillsDir = config.skillsDir || './skills';
+    const skillName = String(name || '').replace(/^@[^/]+\//, '');
+    const destDir = path.join(skillsDir, skillName);
+
+    if (!fs.existsSync(destDir)) {
+      console.error(`Skill not found: ${destDir}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    fs.rmSync(destDir, { recursive: true, force: true });
+    console.log(`Removed ${skillName} from ${addTrailingSlash(skillsDir)}`);
+  });
+
+program
+  .command('publish')
+  .description('Validate local SKILL.md and print registry publishing steps')
+  .action(() => {
+    const skillFile = path.join(process.cwd(), 'SKILL.md');
+    if (!fs.existsSync(skillFile)) {
+      console.error('SKILL.md not found in current directory.');
+      process.exitCode = 1;
+      return;
+    }
+
+    const parsed = parseSkillFile(skillFile, process.cwd());
+    if (!parsed) {
+      console.error('SKILL.md is missing required frontmatter (name, description).');
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log('To publish your skill:');
+    console.log('Fork https://github.com/NicoIzco/vectormcp-registry');
+    console.log('Add your skill to registry.json');
+    console.log('Submit a pull request');
+  });
+
+program
+  .command('list')
+  .description('List all locally installed skills')
+  .action(() => {
+    const config = loadConfig();
+    const skillsDir = config.skillsDir || './skills';
+
+    if (!fs.existsSync(skillsDir)) {
+      console.log(`INSTALLED SKILLS (${skillsDir})`);
+      console.log('No installed skills.');
+      return;
+    }
+
+    const skills = parseSkillsDir(skillsDir).map((skill) => ({
+      name: skill.name,
+      version: skill.version || '-',
+      description: skill.description
+    }));
+
+    console.log(`INSTALLED SKILLS (${skillsDir})`);
+    if (skills.length === 0) {
+      console.log('No installed skills.');
+      return;
+    }
+
+    printTable(
+      ['NAME', 'VERSION', 'DESCRIPTION'],
+      skills.map((skill) => [skill.name, skill.version, skill.description])
+    );
+  });
 
 program
   .command('proxy')
@@ -193,7 +323,16 @@ function addSource(source) {
 
 function addSkill(pathOrGitUrl) {
   const config = loadConfig();
-  const skillsDir = config.skillsDir || './skills';
+  const installResult = installSkillFromSource(pathOrGitUrl, config.skillsDir || './skills');
+  if (!installResult.ok) {
+    console.error(installResult.message);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Skill added from ${installResult.sourceType}: ${installResult.destDir}`);
+}
+
+function installSkillFromSource(pathOrGitUrl, skillsDir) {
   fs.mkdirSync(skillsDir, { recursive: true });
 
   const isGitUrl = /^https?:\/\//.test(pathOrGitUrl) || /^git@/.test(pathOrGitUrl) || pathOrGitUrl.endsWith('.git');
@@ -202,47 +341,54 @@ function addSkill(pathOrGitUrl) {
     const sourceDir = path.resolve(pathOrGitUrl);
     const sourceSkillFile = path.join(sourceDir, 'SKILL.md');
     if (!fs.existsSync(sourceSkillFile)) {
-      console.error(`SKILL.md not found in local folder: ${sourceDir}`);
-      process.exitCode = 1;
-      return;
+      return { ok: false, message: `SKILL.md not found in local folder: ${sourceDir}` };
     }
 
-    const destDir = path.join(skillsDir, path.basename(sourceDir));
+    const folderName = path.basename(sourceDir);
+    const destDir = path.join(skillsDir, folderName);
     if (fs.existsSync(destDir)) {
-      console.error(`Skill destination already exists: ${destDir}`);
-      process.exitCode = 1;
-      return;
+      return { ok: false, message: `Skill destination already exists: ${destDir}` };
     }
 
     fs.cpSync(sourceDir, destDir, { recursive: true });
-    console.log(`Skill added from local path: ${destDir}`);
-    return;
+    return { ok: true, sourceType: 'local path', folderName, destDir };
   }
 
-  const repoName = pathOrGitUrl.split('/').pop().replace(/\.git$/, '');
-  const destDir = path.join(skillsDir, repoName);
+  const folderName = pathOrGitUrl.split('/').pop().replace(/\.git$/, '');
+  const destDir = path.join(skillsDir, folderName);
   if (fs.existsSync(destDir)) {
-    console.error(`Skill destination already exists: ${destDir}`);
-    process.exitCode = 1;
-    return;
+    return { ok: false, message: `Skill destination already exists: ${destDir}` };
   }
 
   const clone = spawnSync('git', ['clone', '--depth', '1', pathOrGitUrl, destDir], { stdio: 'inherit' });
   if (clone.status !== 0) {
-    console.error('Failed to clone skill repository.');
-    process.exitCode = 1;
-    return;
+    return { ok: false, message: 'Failed to clone skill repository.' };
   }
 
   const skillFile = path.join(destDir, 'SKILL.md');
   if (!fs.existsSync(skillFile)) {
     fs.rmSync(destDir, { recursive: true, force: true });
-    console.error('Cloned repository does not contain SKILL.md at the root.');
-    process.exitCode = 1;
-    return;
+    return { ok: false, message: 'Cloned repository does not contain SKILL.md at the root.' };
   }
 
-  console.log(`Skill added from git: ${destDir}`);
+  return { ok: true, sourceType: 'git', folderName, destDir };
+}
+
+function printTable(headers, rows) {
+  const colWidths = headers.map((header, idx) => {
+    const rowWidths = rows.map((row) => String(row[idx] || '').length);
+    return Math.max(header.length, ...rowWidths);
+  });
+
+  const renderRow = (row) => row.map((value, idx) => String(value || '').padEnd(colWidths[idx])).join('  ');
+  console.log(renderRow(headers));
+  for (const row of rows) {
+    console.log(renderRow(row));
+  }
+}
+
+function addTrailingSlash(inputPath) {
+  return inputPath.endsWith(path.sep) ? inputPath : `${inputPath}${path.sep}`;
 }
 
 function scanDirectory(rootDir) {

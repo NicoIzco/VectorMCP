@@ -1,0 +1,23 @@
+[
+  {
+    "name": "@nico/web-scraper",
+    "repo": "https://github.com/nico/web-scraper-skill",
+    "description": "Extract data from websites",
+    "version": "1.0.0",
+    "tags": ["web", "scraping"]
+  },
+  {
+    "name": "@nico/test-runner",
+    "repo": "https://github.com/nico/test-runner-skill",
+    "description": "Run test suites across projects",
+    "version": "1.2.0",
+    "tags": ["testing", "ci"]
+  },
+  {
+    "name": "@community/readme-writer",
+    "repo": "https://github.com/community/readme-writer-skill",
+    "description": "Generate and improve project README files",
+    "version": "0.9.1",
+    "tags": ["docs", "writing"]
+  }
+]
