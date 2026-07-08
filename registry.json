@@ -19,5 +19,12 @@
     "description": "Generate and improve project README files",
     "version": "0.9.1",
     "tags": ["docs", "writing"]
+  },
+  {
+    "name": "@nico/agent-loop-design",
+    "repo": "https://github.com/NicoIzco/agent-loop-design-skill",
+    "description": "Design guide for agent loops: triggers, stop conditions, verification, loop types",
+    "version": "1.0.0",
+    "tags": ["agents", "design", "llm"]
   }
 ]

@@ -8,6 +8,7 @@ export const DEFAULT_CONFIG = {
   registryUrl: 'https://raw.githubusercontent.com/NicoIzco/vectormcp-registry/main/registry.json',
   port: 3000,
   topK: 5,
+  embedder: 'local',
   sources: []
 };
 
@@ -28,10 +29,12 @@ export function ensureDataDir(dataDir) {
 
 export class LocalEmbedder {
   constructor(dim = 384) {
+    this.name = 'local';
+    this.model = null;
     this.dim = dim;
   }
 
-  embed(text) {
+  async embed(text) {
     const vec = new Array(this.dim).fill(0);
     const words = String(text || '').toLowerCase().match(/[a-z0-9_]+/g) || [];
     if (words.length === 0) return vec;
@@ -48,29 +51,63 @@ export class LocalEmbedder {
 export class VectorStore {
   constructor(filePath) {
     this.filePath = filePath;
+    this.version = 1;
+    this.meta = null;
     this.items = [];
   }
 
   load() {
     if (!fs.existsSync(this.filePath)) return;
-    this.items = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
+    if (Array.isArray(raw)) {
+      this.items = raw;
+      this.meta = null;
+      return;
+    }
+    this.version = raw.version ?? 1;
+    this.meta = raw.embedder ?? null;
+    this.items = raw.items ?? [];
   }
 
   save() {
-    fs.writeFileSync(this.filePath, JSON.stringify(this.items, null, 2));
+    const envelope = {
+      version: this.version,
+      embedder: this.meta,
+      updatedAt: new Date().toISOString(),
+      items: this.items
+    };
+    fs.writeFileSync(this.filePath, JSON.stringify(envelope, null, 2));
   }
 
-  rebuild(tools, embedder) {
-    this.items = tools.map((tool) => ({
-      id: tool.id,
-      vector: embedder.embed(buildEmbeddingInput(tool)),
-      tool
-    }));
+  matchesEmbedder(embedder) {
+    if (!this.meta) return false;
+    return (
+      this.meta.name === embedder.name
+      && (this.meta.model || null) === (embedder.model || null)
+      && this.meta.dim === embedder.dim
+    );
+  }
+
+  async rebuild(tools, embedder) {
+    const items = [];
+    for (const tool of tools) {
+      const vector = await embedder.embed(buildEmbeddingInput(tool));
+      if (vector.length !== embedder.dim) {
+        throw new Error(`Embedding dimension mismatch: expected ${embedder.dim}, got ${vector.length}`);
+      }
+      items.push({ id: tool.id, vector, tool });
+    }
+    this.items = items;
+    this.meta = {
+      name: embedder.name,
+      model: embedder.model || null,
+      dim: embedder.dim
+    };
     this.save();
   }
 
-  search(query, embedder, topK = 5) {
-    const q = embedder.embed(query);
+  async search(query, embedder, topK = 5) {
+    const q = await embedder.embed(query);
     const scored = this.items
       .map((item) => ({
         score: cosineSimilarity(q, item.vector),
@@ -96,12 +133,12 @@ function extractKeyLines(markdown) {
     .slice(0, 500);
 }
 
-function cosineSimilarity(a, b) {
+export function cosineSimilarity(a, b) {
+  if (a.length !== b.length) return 0;
   let dot = 0;
   let na = 0;
   let nb = 0;
-  const len = Math.min(a.length, b.length);
-  for (let i = 0; i < len; i += 1) {
+  for (let i = 0; i < a.length; i += 1) {
     dot += a[i] * b[i];
     na += a[i] * a[i];
     nb += b[i] * b[i];

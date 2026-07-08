@@ -10,6 +10,13 @@ import { createMcpProxy } from './mcp-proxy.js';
 import { parseSkillFile, parseSkillsDir } from './parsers.js';
 import { resolveSkill, searchRegistry } from './registry.js';
 
+function applyEmbedderOption(config, embedder) {
+  if (embedder) {
+    config.embedder = embedder;
+  }
+  return config;
+}
+
 const program = new Command();
 program.name('vectormcp').description('Semantic MCP tool router').version('0.1.0');
 
@@ -27,13 +34,14 @@ program
   .description('Start VectorMCP server')
   .option('-c, --config <path>', 'config path', 'config.json')
   .option('-w, --watch', 'watch skills/source directories and rebuild index on changes')
-  .action(async ({ config: configPath, watch }) => {
+  .option('--embedder <type>', 'embedding backend (local|minilm)')
+  .action(async ({ config: configPath, watch, embedder }) => {
     if (!fs.existsSync(configPath)) {
       console.error(`Config not found: ${configPath}. Run \`vectormcp init\` first.`);
       process.exitCode = 1;
       return;
     }
-    const config = loadConfig(configPath);
+    const config = applyEmbedderOption(loadConfig(configPath), embedder);
     const runtime = await bootstrap(config);
 
     if (watch) {
@@ -47,6 +55,7 @@ program
   .description('Scan a directory for skills/tool files and start immediately')
   .option('-p, --port <n>', 'server port', '3000')
   .option('-w, --watch', 'watch scanned directory and rebuild index on changes')
+  .option('--embedder <type>', 'embedding backend (local|minilm)')
   .action(async (directory, opts) => {
     const scanDir = path.resolve(directory);
     if (!fs.existsSync(scanDir) || !fs.statSync(scanDir).isDirectory()) {
@@ -57,7 +66,7 @@ program
 
     const scanResults = scanDirectory(scanDir);
     const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vectormcp-'));
-    const config = {
+    const config = applyEmbedderOption({
       ...DEFAULT_CONFIG,
       dataDir: tempDataDir,
       skillsDir: scanDir,
@@ -67,7 +76,7 @@ program
         path: file,
         category: 'general'
       }))
-    };
+    }, opts.embedder);
 
     const runtime = await bootstrap(config);
     console.log(`Found ${scanResults.skillCount} skills, ${scanResults.toolFiles.length} tool files. Server running on http://localhost:${config.port}`);
@@ -233,6 +242,7 @@ program
   .option('--transport <type>', 'transport type (stdio|sse)', 'stdio')
   .option('-p, --port <n>', 'port for SSE transport', '3000')
   .option('-c, --config <path>', 'config path', 'config.json')
+  .option('--embedder <type>', 'embedding backend (local|minilm)')
   .action(async (opts) => {
     if (!fs.existsSync(opts.config)) {
       console.error(`Config not found: ${opts.config}. Run \`vectormcp init\` first.`);
@@ -240,7 +250,7 @@ program
       return;
     }
 
-    const config = loadConfig(opts.config);
+    const config = applyEmbedderOption(loadConfig(opts.config), opts.embedder);
     const proxy = await createMcpProxy(config);
     const transport = String(opts.transport || 'stdio').toLowerCase();
 
