@@ -31,6 +31,32 @@ Example query:
 npx vectormcp query "triage support tickets by priority"
 ```
 
+## Embeddings
+
+VectorMCP ships with a **deliberate zero-dependency default**: a local hash embedder that needs no network, no API keys, and starts instantly with deterministic output.
+
+For higher-quality semantic matching, opt in to MiniLM:
+
+```bash
+npm i @xenova/transformers
+```
+
+Then set `"embedder": "minilm"` in `config.json`, or pass `--embedder minilm` to `start`, `proxy`, or `scan`. The first run downloads the model (~25 MB) and requires network access. If `@xenova/transformers` is unavailable, VectorMCP warns on stderr and falls back to the local embedder automatically. Switching embedders triggers a one-time index rebuild.
+
+Configure embedders in shorthand or full form:
+
+```json
+{ "embedder": "local" }
+```
+
+```json
+{ "embedder": { "type": "minilm", "model": "Xenova/all-MiniLM-L6-v2" } }
+```
+
+**Scaling:** search uses brute-force cosine similarity — O(N) per query, which is fine up to roughly 10k tools. `VectorStore` is the single seam where you could swap in FAISS or another ANN backend beyond that scale.
+
+If model cache churn is an issue (e.g. on OneDrive-synced folders), set `TRANSFORMERS_CACHE` to a stable local path.
+
 ## 🔌 MCP Proxy
 
 Run VectorMCP as an MCP middleware layer for Claude Desktop, Cursor, and compatible clients.
@@ -157,6 +183,8 @@ Useful flags:
 - `vectormcp start --watch`
 - `vectormcp scan <dir> --watch`
 - `vectormcp proxy --transport stdio|sse --port 3000`
+- `vectormcp start --embedder minilm`
+- `vectormcp proxy --embedder local|minilm`
 
 ## Skill format (`SKILL.md`)
 
@@ -217,21 +245,21 @@ skills/
 VectorMCP’s retrieval flow is intentionally simple and local-first:
 
 1. Parse tools from configured sources and skill folders.
-2. Build vectors with `LocalEmbedder` (hash-based bag-of-words, 384 dimensions).
-3. Store vectors in `VectorStore`.
+2. Build vectors with the configured embedder (local hash by default, optional MiniLM).
+3. Store vectors in `VectorStore` with embedder metadata for invalidation on switch.
 4. Score query-to-tool similarity with cosine similarity.
 5. Return ranked tools for MCP listing, completion, or query responses.
 
 Core components:
 
-- `LocalEmbedder` — deterministic local embeddings.
-- `VectorStore` — indexed vectors + search.
+- `LocalEmbedder` / MiniLM — pluggable embedding backends (`src/embedders.js`).
+- `VectorStore` — indexed vectors + search with embedder-aware persistence.
 - `ToolRegistry` — JSON storage with upsert/dedup behavior.
 - MCP transport layer — stdio or SSE for protocol clients.
 
 ### Notes
 
-- Embeddings are local hash vectors (fast, zero dependencies, no external embedding service).
+- Default embeddings are local hash vectors (fast, zero dependencies, no external service). MiniLM is an optional upgrade via `npm i @xenova/transformers`.
 - WebMCP extraction uses Playwright when available.
 - Repo parsing targets Markdown/JSON tool definitions.
 
