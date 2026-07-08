@@ -1,13 +1,14 @@
 import express from 'express';
 import { parseSource, parseSkillsDir } from './parsers.js';
 import { ActivityTracker } from './analytics.js';
-import { SourceMeta, ensureDataDir, LocalEmbedder, ToolRegistry, VectorStore, saveConfig } from './core.js';
+import { SourceMeta, ensureDataDir, ToolRegistry, VectorStore, saveConfig } from './core.js';
+import { createEmbedder, embedderSignature } from './embedders.js';
 
 export async function bootstrap(config) {
   ensureDataDir(config.dataDir);
   const tools = new ToolRegistry(config.dataDir);
   tools.load();
-  const embedder = new LocalEmbedder();
+  const embedder = await createEmbedder(config);
   const index = new VectorStore(`${config.dataDir}/index.json`);
   index.load();
   const sourceMeta = new SourceMeta(config.dataDir);
@@ -23,7 +24,7 @@ export async function bootstrap(config) {
       const parsed = await parseSource(source, config.dataDir);
       tools.removeBySource(sourceId);
       tools.upsertMany(parsed);
-      index.rebuild(tools.tools, embedder);
+      await index.rebuild(tools.tools, embedder);
       sourceMeta.set(sourceId, {
         status: 'synced',
         lastSync: new Date().toISOString(),
@@ -50,13 +51,18 @@ export async function bootstrap(config) {
     }
   }
 
-  function syncSkills() {
+  async function syncSkills() {
     const skillsDir = config.skillsDir || './skills';
     const skills = parseSkillsDir(skillsDir);
     const nonSkillTools = tools.tools.filter((tool) => !tool.skillFormat);
     tools.tools = [...nonSkillTools, ...skills];
     tools.save();
-    index.rebuild(tools.tools, embedder);
+    if (!index.matchesEmbedder(embedder)) {
+      const oldSig = index.meta ? embedderSignature(index.meta) : 'legacy/none';
+      const newSig = embedderSignature(embedder);
+      console.error(`Embedder changed (${oldSig} → ${newSig}), re-embedding ${tools.tools.length} tools`);
+    }
+    await index.rebuild(tools.tools, embedder);
     if (skills.length > 0) {
       console.log(`Loaded ${skills.length} Claude Skill(s) from ${skillsDir}`);
     }
@@ -67,14 +73,14 @@ export async function bootstrap(config) {
     if (config.sources.length > 0) {
       await syncAll();
     }
-    syncSkills();
+    await syncSkills();
   }
 
   if (tools.tools.length === 0 && config.sources.length > 0) {
     await syncAll();
   }
 
-  syncSkills();
+  await syncSkills();
 
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -85,31 +91,35 @@ export async function bootstrap(config) {
     res.json({ tools: tools.tools.map(toMcpSchema) });
   });
 
-  app.post('/mcp/query', (req, res) => {
-    const query = req.body?.query || '';
-    const topK = Number(req.body?.topK || config.topK || 5);
-    const sessionId = req.body?.sessionId ? String(req.body.sessionId) : null;
-    let matches = index.search(query, embedder, topK);
+  app.post('/mcp/query', async (req, res) => {
+    try {
+      const query = req.body?.query || '';
+      const topK = Number(req.body?.topK || config.topK || 5);
+      const sessionId = req.body?.sessionId ? String(req.body.sessionId) : null;
+      let matches = await index.search(query, embedder, topK);
 
-    if (sessionId) {
-      const previousToolIds = new Set(sessionHistory.get(sessionId) || []);
-      matches = matches
-        .map((match) => ({
-          ...match,
-          score: previousToolIds.has(match.tool.id) ? match.score * 1.3 : match.score
-        }))
-        .sort((a, b) => b.score - a.score);
+      if (sessionId) {
+        const previousToolIds = new Set(sessionHistory.get(sessionId) || []);
+        matches = matches
+          .map((match) => ({
+            ...match,
+            score: previousToolIds.has(match.tool.id) ? match.score * 1.3 : match.score
+          }))
+          .sort((a, b) => b.score - a.score);
+      }
+
+      analytics.recordQuery(query);
+      analytics.recordEvent('query', `Query: ${query} — ${matches.length} results`);
+
+      if (sessionId) {
+        const matchedToolIds = matches.map((match) => match.tool.id).slice(-20);
+        sessionHistory.set(sessionId, matchedToolIds);
+      }
+
+      res.json({ query, matches });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
     }
-
-    analytics.recordQuery(query);
-    analytics.recordEvent('query', `Query: ${query} — ${matches.length} results`);
-
-    if (sessionId) {
-      const matchedToolIds = matches.map((match) => match.tool.id).slice(-20);
-      sessionHistory.set(sessionId, matchedToolIds);
-    }
-
-    res.json({ query, matches });
   });
 
   app.post('/mcp/invoke', (req, res) => {
@@ -168,19 +178,23 @@ export async function bootstrap(config) {
     }
   });
 
-  app.delete('/sources/remove', (req, res) => {
-    const sourceId = req.body?.source;
-    if (!sourceId) return res.status(400).json({ error: 'source is required' });
-    const before = config.sources.length;
-    config.sources = config.sources.filter((s) => (s.path || s.url) !== sourceId);
-    if (before === config.sources.length) return res.status(404).json({ error: 'Source not found' });
+  app.delete('/sources/remove', async (req, res) => {
+    try {
+      const sourceId = req.body?.source;
+      if (!sourceId) return res.status(400).json({ error: 'source is required' });
+      const before = config.sources.length;
+      config.sources = config.sources.filter((s) => (s.path || s.url) !== sourceId);
+      if (before === config.sources.length) return res.status(404).json({ error: 'Source not found' });
 
-    tools.removeBySource(sourceId);
-    index.rebuild(tools.tools, embedder);
-    sourceMeta.remove(sourceId);
-    saveConfig(config);
-    analytics.recordEvent('source', `Source deleted: ${sourceId}`);
-    return res.json({ ok: true, removed: sourceId });
+      tools.removeBySource(sourceId);
+      await index.rebuild(tools.tools, embedder);
+      sourceMeta.remove(sourceId);
+      saveConfig(config);
+      analytics.recordEvent('source', `Source deleted: ${sourceId}`);
+      return res.json({ ok: true, removed: sourceId });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
   });
 
   app.get('/sources/list', (_req, res) => {

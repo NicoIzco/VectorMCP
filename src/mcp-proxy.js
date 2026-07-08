@@ -1,6 +1,7 @@
 import express from 'express';
 import { parseSource, parseSkillsDir } from './parsers.js';
-import { ensureDataDir, LocalEmbedder, ToolRegistry, VectorStore } from './core.js';
+import { ensureDataDir, ToolRegistry, VectorStore } from './core.js';
+import { createEmbedder, embedderSignature } from './embedders.js';
 import { toMcpSchema } from './server.js';
 
 export async function createMcpProxy(config) {
@@ -8,7 +9,7 @@ export async function createMcpProxy(config) {
 
   const tools = new ToolRegistry(config.dataDir);
   tools.load();
-  const embedder = new LocalEmbedder();
+  const embedder = await createEmbedder(config);
   const index = new VectorStore(`${config.dataDir}/index.json`);
   index.load();
 
@@ -23,10 +24,16 @@ export async function createMcpProxy(config) {
     const nonSkillTools = tools.tools.filter((tool) => !tool.skillFormat);
     tools.tools = [...nonSkillTools, ...skillTools];
     tools.save();
-    index.rebuild(tools.tools, embedder);
+    if (!index.matchesEmbedder(embedder)) {
+      const oldSig = index.meta ? embedderSignature(index.meta) : 'legacy/none';
+      const newSig = embedderSignature(embedder);
+      console.error(`Embedder changed (${oldSig} → ${newSig}), re-embedding ${tools.tools.length} tools`);
+    }
+    await index.rebuild(tools.tools, embedder);
   }
 
-  if ((config.sources || []).length > 0 || tools.tools.length === 0) {
+  const needsSync = (config.sources || []).length > 0 || tools.tools.length === 0 || !index.matchesEmbedder(embedder);
+  if (needsSync) {
     await syncAllSources();
   }
 
@@ -116,7 +123,7 @@ export async function createMcpProxy(config) {
 
       if (contextHint) {
         const topK = Number(params.topK || 10);
-        selectedTools = index.search(contextHint, embedder, topK).map((match) => match.tool);
+        selectedTools = (await index.search(contextHint, embedder, topK)).map((match) => match.tool);
       }
 
       return success({ tools: selectedTools.map(toMcpSchema) });
@@ -135,7 +142,9 @@ export async function createMcpProxy(config) {
     if (method === 'completion/complete') {
       const text = [params.prompt, params.context, params.input, params.messages?.map((m) => m.content || '').join(' ')].filter(Boolean).join(' ');
       const topK = Number(params.topK || 10);
-      const candidates = text ? index.search(text, embedder, topK) : tools.tools.slice(0, topK).map((tool) => ({ tool, score: 0 }));
+      const candidates = text
+        ? await index.search(text, embedder, topK)
+        : tools.tools.slice(0, topK).map((tool) => ({ tool, score: 0 }));
       const suggestions = candidates.map((match) => ({
         tool: toMcpSchema(match.tool),
         score: match.score
